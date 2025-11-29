@@ -23,14 +23,13 @@ if (!existsSync(DOWNLOAD_DIR)) {
 
 console.log(`Files will be saved to: ${DOWNLOAD_DIR}`);
 
-// Sanitize filename to prevent path traversal attacks
-function sanitizeFilename(filename) {
-  return path.basename(filename).replace(/[^a-zA-Z0-9._\-\s()]/g, "_");
-}
-
 // Validate downloaded file with ffprobe
 function validateFile(filepath, res) {
-  const probe = spawn("ffprobe", [
+  // Try snap version first, then standard ffprobe
+  const ffprobeCmd = existsSync("/snap/bin/ffmpeg.ffprobe")
+    ? "ffmpeg.ffprobe"
+    : "ffprobe";
+  const probe = spawn(ffprobeCmd, [
     "-v",
     "error",
     "-show_entries",
@@ -60,6 +59,14 @@ function validateFile(filepath, res) {
     }
     res.end();
   });
+
+  probe.on("error", (err) => {
+    res.write(
+      `\n⚠️ Warning: ffprobe not found. Install ffmpeg to enable validation.\n`
+    );
+    res.write(`Download completed but file validation skipped.\n`);
+    res.end();
+  });
 }
 
 app.get("/download", (req, res) => {
@@ -69,12 +76,17 @@ app.get("/download", (req, res) => {
     return res.status(400).send("Error: url parameter is missing");
   }
 
-  // Sanitize filename to prevent security issues
-  const safeFilename = sanitizeFilename(filename);
-  const filepath = path.join(DOWNLOAD_DIR, safeFilename);
+  const filepath = path.join(DOWNLOAD_DIR, filename);
 
-  res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-  res.write(`Starting download of "${safeFilename}"...\n\n`);
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  // Send padding to force browser to start rendering (most browsers need ~1KB)
+  res.write(" ".repeat(2048));
+
+  res.write(`Starting download of "${filename}"...\n\n`);
 
   let lastUpdate = 0;
 
@@ -91,16 +103,22 @@ app.get("/download", (req, res) => {
   // Parse ffmpeg progress output
   ff.stderr.on("data", (data) => {
     const line = data.toString();
-    const progress = line.match(
-      /time=(\d{2}:\d{2}:\d{2}\.\d{2}).*size=\s*([0-9.]+)kB/
-    );
+
+    // Match both time and size (they might be on same or different lines)
+    const timeMatch = line.match(/time=(\d{2}:\d{2}:\d{2}\.\d{2})/);
+    const sizeMatch = line.match(/size=\s*(\d+)kB/);
 
     // Update progress at defined interval
-    if (progress && Date.now() - lastUpdate > PROGRESS_UPDATE_INTERVAL) {
+    if (
+      (timeMatch || sizeMatch) &&
+      Date.now() - lastUpdate > PROGRESS_UPDATE_INTERVAL
+    ) {
       lastUpdate = Date.now();
-      const timeStr = progress[1];
-      const sizeKB = parseFloat(progress[2]).toFixed(0);
-      res.write(`downloaded: ${timeStr} - ${sizeKB} kB\n`);
+      const timeStr = timeMatch ? timeMatch[1] : "N/A";
+      const sizeKB = sizeMatch ? sizeMatch[1] : "0";
+      const progressMsg = `downloaded: ${timeStr} - ${sizeKB} kB\n`;
+
+      res.write(progressMsg);
     }
   });
 
@@ -111,7 +129,7 @@ app.get("/download", (req, res) => {
       return res.end();
     }
 
-    res.write(`\n✅ Download of "${safeFilename}" completed successfully\n`);
+    res.write(`\n✅ Download of "${filename}" completed successfully\n`);
     res.write(`\nValidating file with ffprobe...\n`);
 
     validateFile(filepath, res);
