@@ -1,73 +1,100 @@
 import express from "express";
 import path from "path";
 import { spawn } from "child_process";
+import { fileURLToPath } from "url";
+
+// Get current directory path (needed for ES modules)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3000;
+// Save videos to ../videos folder
+const DOWNLOAD_DIR = path.join(__dirname, "..", "videos");
 
-const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR || "/downloads";
-
-console.log(`Файлы будут сохраняться в: ${DOWNLOAD_DIR}`);
+console.log(`Files will be saved to: ${DOWNLOAD_DIR}`);
 
 app.get("/download", (req, res) => {
-  const url = req.query.url;
-  const filename = req.query.filename || "video.mp4";
-  const filepath = path.join(DOWNLOAD_DIR, filename);
+  const { url, filename = "video.mp4" } = req.query;
 
-  if (!url) {
-    return res.status(400).send("Ошибка: не указан параметр url");
-  }
+  if (!url) return res.status(400).send("Error: url parameter is missing");
 
-  // Заголовки для "живого" текстового ответа
-  res.writeHead(200, {
-    "Content-Type": "text/plain; charset=utf-8",
-    "Transfer-Encoding": "chunked",
-  });
-
-  res.write(`Начинаем скачивание файла "${filename}"...\n\n`);
+  res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+  res.write(`Starting download of "${filename}"...\n\n`);
 
   let lastUpdate = 0;
-  let errorOutput = "";
-
-  // Простое копирование потоков без перекодирования
+  const filepath = path.join(DOWNLOAD_DIR, filename);
+  // Copy video stream without re-encoding (faster)
   const ff = spawn("ffmpeg", ["-i", url, "-c", "copy", "-y", filepath]);
 
+  // Parse ffmpeg progress output
   ff.stderr.on("data", (data) => {
     const line = data.toString();
-    errorOutput += line;
-    console.log("ffmpeg:", line);
+    const progress = line.match(
+      /time=(\d{2}:\d{2}:\d{2}\.\d{2}).*size=\s*([0-9.]+)kB/
+    );
 
-    const sizeMatch = line.match(/size=\s*([0-9.]+)kB/);
-    const timeMatch = line.match(/time=(\d{2}:\d{2}:\d{2}\.\d{2})/);
-
-    if (sizeMatch && timeMatch) {
-      const sizeKB = parseFloat(sizeMatch[1]);
-      const time = timeMatch[1];
-      const now = Date.now();
-      if (now - lastUpdate > 1000) {
-        lastUpdate = now;
-        res.write(`скачано: ${time} - ${sizeKB.toFixed(0)} кБ\n`);
-      }
+    // Update progress every 1 second
+    if (progress && Date.now() - lastUpdate > 1000) {
+      lastUpdate = Date.now();
+      res.write(
+        `downloaded: ${progress[1]} - ${parseFloat(progress[2]).toFixed(
+          0
+        )} kB\n`
+      );
     }
   });
 
+  // Handle ffmpeg completion
   ff.on("close", (code) => {
-    if (code === 0) {
-      res.write(`\n✅ Скачивание файла "${filename}" завершено успешно.\n`);
-    } else {
-      res.write(`\n❌ Ошибка: ffmpeg завершился с кодом ${code}.\n`);
-      res.write(`\nВывод ffmpeg:\n${errorOutput}\n`);
-      console.error("Полный вывод ffmpeg:", errorOutput);
+    if (code !== 0) {
+      res.write(`\n❌ Error: ffmpeg exited with code ${code}\n`);
+      return res.end();
     }
-    res.end();
+
+    res.write(`\n✅ Download of "${filename}" completed successfully\n`);
+    res.write(`\nValidating file with ffprobe...\n`);
+
+    // Verify video file integrity with ffprobe
+    const probe = spawn("ffprobe", [
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration,size,bit_rate:stream=codec_name,width,height",
+      "-of",
+      "default=noprint_wrappers=1",
+      filepath,
+    ]);
+
+    let probeOutput = "";
+
+    probe.stdout.on("data", (data) => {
+      probeOutput += data.toString();
+    });
+
+    probe.stderr.on("data", (data) => {
+      probeOutput += data.toString();
+    });
+
+    probe.on("close", (probeCode) => {
+      if (probeCode === 0) {
+        res.write(`\nVALIDATION_SUCCESS: File is valid and playable\n`);
+        res.write(`\nFile information:\n${probeOutput}\n`);
+      } else {
+        res.write(`\nVALIDATION_FAILED: File is corrupted or invalid\n`);
+        res.write(`\nValidation error:\n${probeOutput}\n`);
+      }
+      res.end();
+    });
   });
 
+  // Handle ffmpeg execution errors
   ff.on("error", (err) => {
-    res.write(`\n⚠️ Ошибка запуска ffmpeg: ${err.message}\n`);
+    res.write(`\n⚠️ Error starting ffmpeg: ${err.message}\n`);
     res.end();
   });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Сервер запущен: http://localhost:${PORT}`);
+  console.log(`🚀 Server started: http://localhost:${PORT}`);
 });
