@@ -25,15 +25,11 @@ console.log(`Files will be saved to: ${DOWNLOAD_DIR}`);
 
 // Validate downloaded file with ffprobe
 function validateFile(filepath, res) {
-  // Try snap version first, then standard ffprobe
-  const ffprobeCmd = existsSync("/snap/bin/ffmpeg.ffprobe")
-    ? "ffmpeg.ffprobe"
-    : "ffprobe";
-  const probe = spawn(ffprobeCmd, [
+  const probe = spawn("ffprobe", [
     "-v",
     "error",
     "-show_entries",
-    "format=duration,size,bit_rate:stream=codec_name,width,height",
+    "format=duration,size",
     "-of",
     "default=noprint_wrappers=1",
     filepath,
@@ -60,9 +56,9 @@ function validateFile(filepath, res) {
     res.end();
   });
 
-  probe.on("error", (err) => {
+  probe.on("error", () => {
     res.write(
-      `\n⚠️ Warning: ffprobe not found. Install ffmpeg to enable validation.\n`
+      `\n⚠️ Warning: ffprobe not found. Install ffmpeg in runtime image.\n`,
     );
     res.write(`Download completed but file validation skipped.\n`);
     res.end();
@@ -91,7 +87,19 @@ app.get("/download", (req, res) => {
   let lastUpdate = 0;
 
   // Copy video stream without re-encoding (faster)
-  const ff = spawn("ffmpeg", ["-i", url, "-c", "copy", "-y", filepath]);
+  const ffArgs = [
+    "-i",
+    url,
+    "-c",
+    "copy",
+    "-bsf:a",
+    "aac_adtstoasc",
+    "-movflags",
+    "+faststart",
+    "-y",
+    filepath,
+  ];
+  const ff = spawn("ffmpeg", ffArgs);
 
   // Clean up process if client disconnects
   res.on("close", () => {
