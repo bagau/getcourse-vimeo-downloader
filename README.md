@@ -33,9 +33,13 @@ This tool is intended for downloading purchased course content for personal offl
 
 - One-time init (Linux/macOS): `./scripts/init-docker.sh`
 - Start downloader every time (Linux/macOS): `./scripts/start-docker.sh`
+- Cleanup (Linux/macOS): `./scripts/cleanup-docker.sh`
 - One-time init (Windows PowerShell): `.\scripts\init-docker.ps1`
 - Start downloader every time (Windows PowerShell): `.\scripts\start-docker.ps1`
+- Cleanup (Windows PowerShell): `.\scripts\cleanup-docker.ps1`
 - The start scripts use fixed defaults (image `getcourse-vimeo`, port `3000`, volume `./videos:/app/videos`) and require no parameters.
+- The start scripts auto-replace previous downloader container if it is still running.
+- Cleanup scripts remove all Docker containers on the machine, then remove image `getcourse-vimeo`.
 
 ## ffmpeg/ffprobe command usage
 
